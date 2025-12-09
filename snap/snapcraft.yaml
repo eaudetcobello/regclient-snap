@@ -1,0 +1,49 @@
+name: regclient
+base: core24
+version: "0.11.0"
+title: "regclient"
+contact: https://github.com/eaudetcobello/regclient-snap/issues
+issues: https://github.com/eaudetcobello/regclient-snap/issues
+source-code: https://github.com/regclient/regclient
+website: https://regclient.org/
+license: Apache-2.0
+summary: Docker and OCI Registry Client in Go.
+description: |
+  Regclient is a client interface for the Docker and OCI Registry API, written in Go.
+  It provides tools for managing registries with commands such as:
+    - regctl: For registry operations.
+    - regbot: A registry monitoring bot.
+    - regsync: For synchronizing registry content.
+grade: stable
+confinement: strict
+platforms:
+  amd64:
+  arm64:
+
+parts:
+  regclient:
+    plugin: go
+    build-snaps: [go/latest/stable]
+    source: https://github.com/regclient/regclient.git
+    source-tag: v0.11.0
+    build-packages:
+      - git
+    override-build: |
+      LD_FLAGS="-s -w -X github.com/regclient/regclient/internal/version.vcsTag=v0.11.0"
+      for cmd in regbot regctl regsync; do
+        go build -trimpath -ldflags "${LD_FLAGS}" -o ${CRAFT_PART_INSTALL}/bin/${cmd} ./cmd/${cmd}
+      done
+
+apps:
+  regbot:
+    command: bin/regbot
+    plugs: [network, home]
+    aliases: [regbot]
+  regctl:
+    command: bin/regctl
+    plugs: [network, home]
+    aliases: [regctl]
+  regsync:
+    command: bin/regsync
+    plugs: [network, home]
+    aliases: [regsync]
