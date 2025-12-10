@@ -1,6 +1,6 @@
 name: regclient
 base: core24
-version: "0.11.0"
+version: "0.11.1"
 title: "regclient"
 contact: https://github.com/eaudetcobello/regclient-snap/issues
 issues: https://github.com/eaudetcobello/regclient-snap/issues
@@ -25,11 +25,11 @@ parts:
     plugin: go
     build-snaps: [go/latest/stable]
     source: https://github.com/regclient/regclient.git
-    source-tag: v0.11.0
+    source-tag: v0.11.1
     build-packages:
       - git
     override-build: |
-      LD_FLAGS="-s -w -X github.com/regclient/regclient/internal/version.vcsTag=v0.11.0"
+      LD_FLAGS="-s -w -X github.com/regclient/regclient/internal/version.vcsTag=v0.11.1"
       for cmd in regbot regctl regsync; do
         go build -trimpath -ldflags "${LD_FLAGS}" -o ${CRAFT_PART_INSTALL}/bin/${cmd} ./cmd/${cmd}
       done
