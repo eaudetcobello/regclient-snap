@@ -1,0 +1,137 @@
+name: Release Snap
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Check for new releases weekly on Monday
+  workflow_dispatch:
+
+jobs:
+  get-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.target.outputs.version }}
+      should_build: ${{ steps.compare.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get current snap version
+        id: current
+        run: |
+          echo "version=$(grep '^version:' snap/snapcraft.yaml | sed 's/version: *"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+
+      - name: Get latest version
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release view --repo regclient/regclient --json tagName -q '.tagName')
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if build is needed
+        id: compare
+        env:
+          CURRENT_VERSION: ${{ steps.current.outputs.version }}
+          TARGET_VERSION: ${{ steps.target.outputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          echo "Current: ${CURRENT_VERSION}"
+          echo "Target:  ${TARGET_VERSION}"
+          if [ "${CURRENT_VERSION}" != "${TARGET_VERSION}" ] || [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: get-version
+    if: needs.get-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # remote-build requires a full clone (not shallow)
+          fetch-depth: 0
+
+      - name: Update version in snapcraft.yaml
+        env:
+          VERSION: ${{ needs.get-version.outputs.version }}
+        run: |
+          sed -i "s/^version: .*/version: \"${VERSION}\"/" snap/snapcraft.yaml
+          sed -i "s/source-tag: .*/source-tag: v${VERSION}/" snap/snapcraft.yaml
+          sed -i "s/vcsTag=v[0-9.]*/vcsTag=v${VERSION}/" snap/snapcraft.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add snap/snapcraft.yaml
+          git commit -m "ci: update to ${VERSION} for remote-build" || true
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Build snaps via remote-build
+        run: |
+          snapcraft remote-build \
+            --build-for amd64,arm64 \
+            --launchpad-accept-public-upload
+
+      - name: Install amd64 snap and verify binaries
+        env:
+          VERSION: ${{ needs.get-version.outputs.version }}
+        run: |
+          SNAP=$(ls regclient_*_amd64.snap)
+          sudo snap install --dangerous "${SNAP}"
+          for cmd in regctl regsync regbot; do
+            OUTPUT=$(regclient.${cmd} version)
+            echo "${cmd}: ${OUTPUT}"
+            echo "${OUTPUT}" | grep -q "v${VERSION}" || { echo "FAIL: ${cmd} version mismatch"; exit 1; }
+          done
+          sudo snap remove regclient
+
+      - name: Upload snap artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: snaps
+          path: "*.snap"
+
+  publish:
+    needs: [get-version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download snap artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: snaps
+
+      - name: Publish to Snap Store
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAP_STORE_CREDENTIALS }}
+        run: |
+          sudo snap install snapcraft --classic
+          for snap_file in *.snap; do
+            echo "Publishing ${snap_file}..."
+            snapcraft upload "${snap_file}" --release=stable
+          done
+
+  update-repo:
+    needs: [get-version, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update version in snapcraft.yaml
+        env:
+          VERSION: ${{ needs.get-version.outputs.version }}
+        run: |
+          sed -i "s/^version: .*/version: \"${VERSION}\"/" snap/snapcraft.yaml
+          sed -i "s/source-tag: .*/source-tag: v${VERSION}/" snap/snapcraft.yaml
+          sed -i "s/vcsTag=v[0-9.]*/vcsTag=v${VERSION}/" snap/snapcraft.yaml
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add snap/snapcraft.yaml
+          git diff --staged --quiet && echo "Already up to date" && exit 0
+          git commit -m "Release ${VERSION}"
+          git push
